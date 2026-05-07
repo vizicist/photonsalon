@@ -14,8 +14,9 @@
             <div class="pad pad-c" data-source="C" aria-label="Pad C">C</div>
 
             <section id="touchscreen" aria-label="Palette touchscreen mirror">
-                <iframe id="gui-frame" src="/palette/?touchscreen=1"></iframe>
-                <div id="touch-layer"></div>
+                <div id="nats-panel">
+                    <span>NATS</span>
+                </div>
             </section>
         </section>
         <div id="status">
@@ -24,6 +25,7 @@
         </div>
     </main>
 
-    <script src="remote.js"></script>
+    <script src="config.js"></script>
+    <script type="module" src="remote.js"></script>
 </body>
 </html>

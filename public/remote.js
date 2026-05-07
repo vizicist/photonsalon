@@ -1,21 +1,22 @@
+import { connect, StringCodec } from '../node_modules/nats.ws/esm/nats.js';
+
 (function () {
     const params = new URLSearchParams(window.location.search);
     const targetHostEl = document.getElementById('target-host');
     const transportStateEl = document.getElementById('transport-state');
     const controller = document.getElementById('palette-controller');
-    const guiFrame = document.getElementById('gui-frame');
     const activePointers = new Map();
+    const sc = StringCodec();
     const defaultPressure = 0.25;
     const maxPressure = 1.0;
     const lingerDelayMs = 180;
     const pressureRisePerSecond = 0.55;
     const lingerMoveTolerance = 0.018;
-    let targetHost = params.get('host') || '';
-    let localHost = '';
+    const natsUrl = params.get('nats') || window.NATS_URL || '';
+    let targetHost = params.get('host') || window.PHOTON_SALON_HOST || 'photonsalon';
+    let nc = null;
     let nextGid = Math.floor(Date.now() % 1000000);
     let lastSentAt = 0;
-    let natsConnected = false;
-    const engineOrigin = normalizeOrigin(params.get('engine') || window.PHOTON_SALON_ENGINE || '');
 
     document.addEventListener('DOMContentLoaded', init);
 
@@ -23,50 +24,58 @@
         if (params.get('labels') === '1' || params.get('padlabels') === '1') {
             document.body.classList.add('show-pad-labels');
         }
-        if (guiFrame && engineOrigin) {
-            guiFrame.src = `${engineOrigin}/?touchscreen=1`;
-        }
-        await loadTargetHost();
-        updateTransportState();
+
+        targetHostEl.textContent = targetHost;
+        await connectNats();
         document.querySelectorAll('.pad').forEach(bindSurface);
     }
 
-    function normalizeOrigin(value) {
-        if (!value) return '';
-        return value.replace(/\/+$/, '');
-    }
-
-    function apiUrl(path) {
-        return `${engineOrigin}${path}`;
-    }
-
-    async function loadTargetHost() {
-        if (targetHost) {
-            targetHostEl.textContent = targetHost;
+    async function connectNats() {
+        if (!natsUrl) {
+            setTransportState('error', 'NATS_URL missing');
             return;
         }
+        setTransportState('connecting', 'NATS connecting');
         try {
-            const resp = await fetch(apiUrl('/api'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ api: 'global.status' })
+            nc = await connect({
+                servers: natsUrl,
+                maxReconnectAttempts: -1,
+                reconnect: true,
+                reconnectTimeWait: 1000
             });
-            const data = await resp.json();
-            let status = data.result;
-            if (typeof status === 'string') status = JSON.parse(status);
-            localHost = status.hostname || '';
-            targetHost = localHost;
-            natsConnected = status.natsconnected === true || status.natsconnected === 'true';
+            setTransportState('ready', 'NATS ready');
+            watchNatsStatus();
+            await refreshTargetStatus();
         } catch (err) {
-            targetHost = '';
-            localHost = '';
-            natsConnected = false;
+            nc = null;
+            setTransportState('error', err.message || 'NATS connection failed');
         }
-        targetHostEl.textContent = targetHost || 'local Palette';
     }
 
-    function shouldUseLocalApi(payload) {
-        return !natsConnected && (!payload.host || payload.host === localHost || payload.host === targetHost);
+    async function watchNatsStatus() {
+        try {
+            for await (const status of nc.status()) {
+                if (status.type === 'disconnect') {
+                    setTransportState('error', 'NATS disconnected');
+                } else if (status.type === 'reconnect') {
+                    setTransportState('ready', 'NATS ready');
+                }
+            }
+        } catch (err) {
+            setTransportState('error', err.message || 'NATS status error');
+        }
+    }
+
+    async function refreshTargetStatus() {
+        try {
+            const status = await requestPaletteApi({ api: 'global.status' }, 1500);
+            if (status && status.hostname) {
+                targetHost = status.hostname;
+                targetHostEl.textContent = targetHost;
+            }
+        } catch (err) {
+            setTransportState('error', err.message || 'Palette status unavailable');
+        }
     }
 
     function bindSurface(el) {
@@ -155,7 +164,7 @@
             if (now - latest.lingerStartedAt <= lingerDelayMs) return;
             const elapsed = (now - latest.lingerStartedAt - lingerDelayMs) / 1000;
             latest.pressure = clampToRange(defaultPressure + elapsed * pressureRisePerSecond, defaultPressure, maxPressure);
-            sendPressureDrag(pointerId, latest);
+            sendPressureDrag(latest);
         }, 80);
     }
 
@@ -166,7 +175,7 @@
         }
     }
 
-    function sendPressureDrag(pointerId, active) {
+    function sendPressureDrag(active) {
         const pos = active.lastPos;
         const payload = {
             host: targetHost,
@@ -205,52 +214,37 @@
     }
 
     async function postPaletteApi(payload) {
-        if (shouldUseLocalApi(payload)) {
-            return postLocal(payload);
-        }
-        return postNats(payload);
-    }
-
-    async function postLocal(payload) {
         try {
-            const localPayload = Object.assign({}, payload);
-            delete localPayload.host;
-            const resp = await fetch(apiUrl('/api'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(localPayload)
-            });
-            const data = await resp.json();
-            if (!resp.ok || data.error) throw new Error(data.error || resp.statusText);
-            setTransportState('ready', 'Local API ready');
+            await requestPaletteApi(payload, 1000);
+            setTransportState('ready', 'NATS ready');
         } catch (err) {
-            setTransportState('error', err.message || 'Local API error');
+            setTransportState('error', err.message || 'NATS API error');
         }
     }
 
-    async function postNats(payload) {
-        try {
-            const resp = await fetch(apiUrl('/nats/api'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await resp.json();
-            if (!resp.ok || data.error) throw new Error(data.error || resp.statusText);
-            setTransportState('ready', 'NATS proxy ready');
-        } catch (err) {
-            setTransportState('error', err.message || 'NATS proxy error');
+    async function requestPaletteApi(payload, timeout) {
+        if (!nc) {
+            throw new Error('NATS not connected');
         }
-    }
 
-    function updateTransportState() {
-        if (natsConnected) {
-            setTransportState('ready', 'NATS proxy ready');
-        } else if (!targetHost || targetHost === localHost) {
-            setTransportState('ready', 'Local API ready');
-        } else {
-            setTransportState('error', 'NATS disconnected');
+        const apiPayload = Object.assign({}, payload);
+        const host = apiPayload.host || targetHost;
+        delete apiPayload.host;
+
+        const subject = `to_palette.${host}.api`;
+        const msg = await nc.request(subject, sc.encode(JSON.stringify(apiPayload)), { timeout });
+        const data = JSON.parse(sc.decode(msg.data));
+        if (data.error) throw new Error(data.error);
+
+        let result = data.result;
+        if (typeof result === 'string' && (result.startsWith('{') || result.startsWith('['))) {
+            try {
+                result = JSON.parse(result);
+            } catch (err) {
+                // Return the original string if it only looks like JSON.
+            }
         }
+        return result;
     }
 
     function pointerArea(event) {
@@ -264,7 +258,7 @@
     }
 
     function clampToRange(value, min, max) {
-        return Math.max(min, Math.min(max, value));
+        return Math.max(min, Math.min(value, max));
     }
 
     function distance(a, b) {

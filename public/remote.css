@@ -129,23 +129,21 @@ body.show-pad-labels .pad {
     overflow: hidden;
 }
 
-#gui-frame {
-    width: 300%;
-    height: 300%;
-    border: 0;
-    background: #000;
-    transform: scale(0.33333);
-    transform-origin: 0 0;
-}
-
-#touch-layer {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-}
-
-#touch-layer.active {
-    background: rgba(22, 199, 201, 0.08);
+#nats-panel {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    color: rgba(22, 199, 201, 0.78);
+    font-size: clamp(17px, 2.5vw, 34px);
+    font-weight: 700;
+    letter-spacing: 0;
+    background:
+        linear-gradient(rgba(22, 199, 201, 0.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(22, 199, 201, 0.08) 1px, transparent 1px),
+        radial-gradient(circle at center, rgba(22, 199, 201, 0.16), transparent 68%);
+    background-size: 18px 18px, 18px 18px, 100% 100%;
+    text-shadow: 0 0 10px rgba(22, 199, 201, 0.55);
 }
 
 #status {

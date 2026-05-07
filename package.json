@@ -8,5 +8,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "nats.ws": "^1.30.3"
   }
 }
